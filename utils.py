@@ -1,10 +1,9 @@
 import json
 import requests
 import streamlit as st
-API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
+API_KEY = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))
 # Paste your API key here (Starts with AIzaSy...)
-API_KEY = "AQ.Ab8RN6KnfLqxbm9mIQg11WHIBHiHUT6s450M9hS1I1lkb0Qavg"
 
 # Updated model endpoint to gemini-3.6-flash
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={API_KEY}"
