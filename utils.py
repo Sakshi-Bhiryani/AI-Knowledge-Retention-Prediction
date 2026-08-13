@@ -1,6 +1,7 @@
 import json
 import requests
 import streamlit as st
+import os
 
 API_KEY = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))
 # Paste your API key here (Starts with AIzaSy...)
