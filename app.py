@@ -147,7 +147,7 @@ elif app_mode == "Take Quiz":
                 prompt = f"Create a 3-question multiple-choice quiz about '{quiz_topic}'. Return JSON array of objects, each with 'question', 'options' (array of 4 string choices), and 'answer' (exact matching option string)."
                 try:
                     response = client.models.generate_content(
-                        model="gemini-2.5-flash",
+                        model="gemini-3.6-flash",
                         contents=prompt,
                         config=types.GenerateContentConfig(
                             response_mime_type="application/json"
