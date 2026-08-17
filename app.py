@@ -137,6 +137,8 @@ elif app_mode == "Take Quiz":
     st.title("🎯 AI-Generated Knowledge Quiz")
     st.write("Test your retention on demand using Gemini AI.")
 
+    client = get_gemini_client()
+
     quiz_topic = st.text_input("Enter Topic for Quiz", placeholder="e.g., Machine Learning Fundamentals")
     
     if st.button("Generate Quiz") and quiz_topic:
