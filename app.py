@@ -6,15 +6,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 # ---------------------------------------------------------
-# 1. CLEAR OVERRIDING GOOGLE CLOUD OAUTH VARIABLES
-# (Prevents 401 ACCESS_TOKEN_TYPE_UNSUPPORTED errors)
-# ---------------------------------------------------------
-for env_var in ["GOOGLE_APPLICATION_CREDENTIALS", "GCP_PROJECT", "GOOGLE_CLOUD_PROJECT"]:
-    if env_var in os.environ:
-        del os.environ[env_var]
-
-# ---------------------------------------------------------
-# 2. PAGE CONFIGURATION
+# 1. PAGE CONFIGURATION
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="AI Knowledge Retention Predictor",
@@ -24,41 +16,46 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# 3. UPDATED & SAFE GOOGLE GEMINI INITIALIZATION
+# 2. UPDATED SDK INITIALIZATION (using google-genai)
 # ---------------------------------------------------------
-gemini_model = None
+client = None
 selected_model_name = "None"
 genai_available = False
 
 try:
-    import google.generativeai as genai
+    from google import genai
     genai_available = True
 except ImportError:
     genai_available = False
 
-raw_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+# Fetch key from Streamlit Secrets or Environment Variables
+raw_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
 if genai_available and raw_key:
     try:
         clean_key = str(raw_key).strip().strip('"').strip("'")
-        genai.configure(api_key=clean_key)
+        # Initialize official GenAI client
+        client = genai.Client(api_key=clean_key)
         
-        # Try latest model identifiers sequentially
+        # Test models in order of capability
         model_candidates = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-pro"]
-        
         for model_id in model_candidates:
             try:
-                gemini_model = genai.GenerativeModel(model_id)
+                # Test a fast lightweight call to confirm model availability
+                client.models.generate_content(
+                    model=model_id,
+                    contents="ping"
+                )
                 selected_model_name = model_id
                 break
             except Exception:
                 continue
 
     except Exception as e:
-        gemini_model = None
+        client = None
 
 # ---------------------------------------------------------
-# 4. DATABASE SETUP (SQLite)
+# 3. DATABASE SETUP (SQLite)
 # ---------------------------------------------------------
 def init_db():
     conn = sqlite3.connect("retention_predictor.db")
@@ -97,18 +94,15 @@ def get_logs():
 init_db()
 
 # ---------------------------------------------------------
-# 5. VECTORIZED EBBINGHAUS RETENTION ALGORITHM
+# 4. EBBINGHAUS RETENTION ALGORITHM
 # ---------------------------------------------------------
 def calculate_ebbinghaus_retention(days, strength=1.5):
-    """
-    R = exp(-t / S)
-    Uses np.maximum to safely evaluate both single values and NumPy arrays.
-    """
+    """R = exp(-t / S) using vector-safe np.maximum"""
     days_clean = np.maximum(days, 0)
     return np.exp(-days_clean / strength) * 100
 
 # ---------------------------------------------------------
-# 6. HEADER & SIDEBAR NAVIGATION
+# 5. HEADER & SIDEBAR NAVIGATION
 # ---------------------------------------------------------
 st.title("🧠 AI Knowledge Retention Predictor")
 st.caption("Predict long-term memory decay and generate automated revision quizzes with Gemini AI.")
@@ -118,19 +112,19 @@ with st.sidebar:
     st.markdown("---")
     
     if not genai_available:
-        st.error("❌ `google-generativeai` package missing. Add it to `requirements.txt`.")
+        st.error("❌ `google-genai` package missing. Update `requirements.txt`!")
     elif not raw_key:
         st.warning("⚠️ `GEMINI_API_KEY` missing in Streamlit Secrets.")
-    elif gemini_model:
+    elif client and selected_model_name != "None":
         st.success(f"✅ Gemini AI Connected (`{selected_model_name}`)")
     else:
-        st.error("❌ Failed to initialize Gemini model.")
+        st.error("❌ Invalid API Key or Authentication Error.")
         
     st.markdown("---")
     app_mode = st.radio("Select View", ["Dashboard & Predictor", "AI Quiz Generator", "Learning History Log"])
 
 # ---------------------------------------------------------
-# 7. VIEW 1: DASHBOARD & PREDICTOR
+# 6. VIEW 1: DASHBOARD & PREDICTOR
 # ---------------------------------------------------------
 if app_mode == "Dashboard & Predictor":
     st.subheader("📊 Memory Decay Analysis")
@@ -174,7 +168,7 @@ if app_mode == "Dashboard & Predictor":
         st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------------------------------------------
-# 8. VIEW 2: AI QUIZ GENERATOR
+# 7. VIEW 2: AI QUIZ GENERATOR
 # ---------------------------------------------------------
 elif app_mode == "AI Quiz Generator":
     st.subheader("⚡ Automated AI Assessment")
@@ -182,14 +176,20 @@ elif app_mode == "AI Quiz Generator":
     quiz_topic = st.text_input("Enter Topic to Test", value="Data Structures & Algorithms")
     num_questions = st.slider("Number of Questions", 1, 5, 3)
     
-    if st.button("Generate Quiz with Gemini AI", disabled=(gemini_model is None)):
+    if st.button("Generate Quiz with Gemini AI", disabled=(client is None)):
         with st.spinner("Generating quiz questions..."):
             try:
                 prompt = (
                     f"Create {num_questions} multiple-choice quiz questions for the topic: '{quiz_topic}'. "
                     "For each question, provide 4 options (A, B, C, D) and clearly state the correct answer."
                 )
-                response = gemini_model.generate_content(prompt)
+                
+                # Updated Google GenAI generate_content call
+                response = client.models.generate_content(
+                    model=selected_model_name,
+                    contents=prompt,
+                )
+                
                 st.session_state["active_quiz"] = response.text
             except Exception as e:
                 st.error(f"Failed to query Gemini API: {e}")
@@ -206,7 +206,7 @@ elif app_mode == "AI Quiz Generator":
             st.success("Session saved to SQLite database!")
 
 # ---------------------------------------------------------
-# 9. VIEW 3: LEARNING HISTORY LOG
+# 8. VIEW 3: LEARNING HISTORY LOG
 # ---------------------------------------------------------
 elif app_mode == "Learning History Log":
     st.subheader("📜 Historical Session Logs")
