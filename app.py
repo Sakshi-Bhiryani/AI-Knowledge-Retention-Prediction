@@ -85,9 +85,9 @@ init_db()
 # ---------------------------------------------------------
 def calculate_ebbinghaus_retention(days, strength=1.5):
     """Calculates percentage memory retention using Ebbinghaus decay function."""
-    if days < 0:
-        days = 0
-    return np.exp(-days / strength) * 100
+    # Replaces 'if days < 0:' to support NumPy arrays cleanly
+    days_clean = np.maximum(days, 0)
+    return np.exp(-days_clean / strength) * 100
 
 # ---------------------------------------------------------
 # 5. HEADER & SIDEBAR NAVIGATION
