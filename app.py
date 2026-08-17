@@ -4,70 +4,76 @@ import datetime
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
-import google.generativeai as genai
 
 # ---------------------------------------------------------
-# 1. PAGE CONFIGURATION (Must be the very first Streamlit command)
+# 1. PAGE CONFIGURATION
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="AI Knowledge Retention Predictor",
     page_icon="🧠",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 # ---------------------------------------------------------
-# 2. SAFE API KEY INITIALIZATION & FALLBACK
+# 2. SAFE GOOGLE GEMINI IMPORT & INITIALIZATION
 # ---------------------------------------------------------
-api_key = None
+gemini_model = None
+genai_available = False
 
-# Check Streamlit Cloud Secrets safely
+try:
+    import google.generativeai as genai
+    genai_available = True
+except ImportError:
+    genai_available = False
+
+# Retrieve API key safely from Streamlit Secrets or Environment
+api_key = None
 if "GEMINI_API_KEY" in st.secrets:
     api_key = st.secrets["GEMINI_API_KEY"]
 else:
     api_key = os.getenv("GEMINI_API_KEY")
 
-if api_key:
+if genai_available and api_key:
     try:
         genai.configure(api_key=api_key)
         gemini_model = genai.GenerativeModel("gemini-1.5-flash")
     except Exception as e:
         gemini_model = None
-        st.error(f"Error configuring Gemini API: {e}")
-else:
-    gemini_model = None
 
 # ---------------------------------------------------------
 # 3. DATABASE SETUP (SQLite Persistence)
 # ---------------------------------------------------------
 def init_db():
-    conn = sqlite3.connect("user_history.db")
+    conn = sqlite3.connect("retention_predictor.db")
     c = conn.cursor()
     c.execute("""
-        CREATE TABLE IF NOT EXISTS history (
+        CREATE TABLE IF NOT EXISTS study_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             topic TEXT,
             study_date TEXT,
-            last_score REAL,
-            retention_percent REAL
+            retention_score REAL,
+            quiz_score REAL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.commit()
     conn.close()
 
-def save_history(topic, study_date, score, retention):
-    conn = sqlite3.connect("user_history.db")
+def save_log(topic, study_date, retention_score, quiz_score):
+    conn = sqlite3.connect("retention_predictor.db")
     c = conn.cursor()
     c.execute("""
-        INSERT INTO history (topic, study_date, last_score, retention_percent)
+        INSERT INTO study_logs (topic, study_date, retention_score, quiz_score)
         VALUES (?, ?, ?, ?)
-    """, (topic, str(study_date), score, retention))
+    """, (topic, str(study_date), retention_score, quiz_score))
     conn.commit()
     conn.close()
 
-def fetch_history():
-    conn = sqlite3.connect("user_history.db")
+def get_logs():
+    conn = sqlite3.connect("retention_predictor.db")
     c = conn.cursor()
-    c.execute("SELECT topic, study_date, last_score, retention_percent FROM history ORDER BY id DESC")
+    c.execute("SELECT topic, study_date, retention_score, quiz_score, timestamp FROM study_logs ORDER BY id DESC")
     rows = c.fetchall()
     conn.close()
     return rows
@@ -75,87 +81,124 @@ def fetch_history():
 init_db()
 
 # ---------------------------------------------------------
-# 4. MATHEMATICAL RETENTION LOGIC (Ebbinghaus Forgetting Curve)
+# 4. EBBINGHAUS RETENTION ALGORITHM
 # ---------------------------------------------------------
-def calculate_retention(days_passed, S=1.5):
-    """
-    R = exp(-t / S)
-    t = days passed
-    S = memory strength factor (default 1.5 days for baseline recall)
-    """
-    if days_passed < 0:
-        days_passed = 0
-    return np.exp(-days_passed / S) * 100
+def calculate_ebbinghaus_retention(days, strength=1.5):
+    """Calculates percentage memory retention using Ebbinghaus decay function."""
+    if days < 0:
+        days = 0
+    return np.exp(-days / strength) * 100
 
 # ---------------------------------------------------------
-# 5. USER INTERFACE
+# 5. HEADER & SIDEBAR NAVIGATION
 # ---------------------------------------------------------
 st.title("🧠 AI Knowledge Retention Predictor")
-st.markdown("Predict memory decay using **Ebbinghaus models** and refresh knowledge via **Gemini AI quizzes**.")
+st.caption("Predict long-term memory decay and automate revision scheduling using Generative AI.")
 
-if not api_key:
-    st.warning("⚠️ `GEMINI_API_KEY` is not set. Go to Streamlit Cloud > Settings > Secrets and add `GEMINI_API_KEY = \"your_key\"` to enable AI quizzes.")
-
-col1, col2 = st.columns([1, 1])
-
-with col1:
-    st.subheader("1. Topic Setup")
-    topic = st.text_input("Study Topic", value="Data Structures & Algorithms")
-    study_date = st.date_input("Date Studied", value=datetime.date.today() - datetime.timedelta(days=3))
-    memory_strength = st.slider("Initial Memory Strength (Days)", min_value=0.5, max_value=5.0, value=1.5, step=0.1)
-
-    days_elapsed = (datetime.date.today() - study_date).days
-    current_retention = calculate_retention(days_elapsed, S=memory_strength)
-
-    st.metric("Estimated Current Retention", f"{current_retention:.1f}%")
-
-    if current_retention < 60.0:
-        st.error("🔻 Memory decay threshold passed (< 60%). Revision recommended!")
+with st.sidebar:
+    st.header("⚙️ Configuration")
+    st.markdown("---")
+    
+    if not genai_available:
+        st.error("❌ `google-generativeai` package not detected. Ensure `requirements.txt` is updated on GitHub.")
+    elif not api_key:
+        st.warning("⚠️ `GEMINI_API_KEY` missing in Streamlit Secrets.")
     else:
-        st.success("✅ Memory retention is optimal.")
-
-with col2:
-    st.subheader("2. Memory Decay Curve")
-    days_range = np.linspace(0, 14, 100)
-    retention_range = calculate_retention(days_range, S=memory_strength)
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=days_range, y=retention_range, mode='lines', name='Retention Curve', line=dict(color='#3366CC', width=3)))
-    fig.add_trace(go.Scatter(x=[days_elapsed], y=[current_retention], mode='markers', name='Today', marker=dict(size=12, color='red')))
-    fig.add_shape(type="line", x0=0, y0=60, x1=14, y1=60, line=dict(color="orange", dash="dash"))
-    fig.update_layout(xaxis_title="Days Since Learning", yaxis_title="Retention (%)", yaxis=dict(range=[0, 105]), height=320)
-    st.plotly_chart(fig, use_container_width=True)
-
-st.divider()
+        st.success("✅ Gemini AI Connected")
+        
+    st.markdown("### Navigation")
+    app_mode = st.radio("Select View", ["Dashboard & Predictor", "AI Quiz Generator", "Learning History Log"])
 
 # ---------------------------------------------------------
-# 6. DYNAMIC GEMINI AI QUIZ ENGINE
+# 6. VIEW 1: DASHBOARD & PREDICTOR
 # ---------------------------------------------------------
-st.subheader("3. Interactive AI Quiz Refresh")
-
-if st.button("⚡ Generate AI Quiz", disabled=(gemini_model is None)):
-    with st.spinner(f"Generating question for '{topic}' using Gemini..."):
-        try:
-            prompt = f"Create a single multiple choice question with 4 options (A, B, C, D) and indicate the correct answer for the topic: {topic}."
-            response = gemini_model.generate_content(prompt)
-            st.session_state["quiz_content"] = response.text
-        except Exception as e:
-            st.error(f"Failed to generate quiz: {e}")
-
-if "quiz_content" in st.session_state:
-    st.info(st.session_state["quiz_content"])
-    score_input = st.slider("Record Your Performance Score (%)", 0, 100, 80)
-    if st.button("Save Quiz Performance"):
-        save_history(topic, study_date, score_input, current_retention)
-        st.success("Saved session to database!")
+if app_mode == "Dashboard & Predictor":
+    st.subheader("📊 Memory Decay Analysis")
+    
+    col_input, col_chart = st.columns([1, 1.5])
+    
+    with col_input:
+        st.markdown("#### Input Study Details")
+        topic_name = st.text_input("Subject / Topic Name", value="Computer Vision & Machine Learning")
+        date_learned = st.date_input("Date Studied", value=datetime.date.today() - datetime.timedelta(days=4))
+        memory_factor = st.slider("Memory Strength (Days)", 0.5, 5.0, 1.5, 0.1, help="Higher values represent deeper initial understanding.")
+        
+        days_passed = (datetime.date.today() - date_learned).days
+        current_retention = calculate_ebbinghaus_retention(days_passed, memory_factor)
+        
+        st.markdown("---")
+        st.metric(label="Current Estimated Retention", value=f"{current_retention:.1f}%", delta=f"-{100 - current_retention:.1f}% decay")
+        
+        if current_retention < 60.0:
+            st.error("⚠️ Retention threshold below 60%. Revision recommended today!")
+        else:
+            st.success("✅ Knowledge retention level is within optimal limits.")
+            
+    with col_chart:
+        st.markdown("#### Retentiveness Curve over 14 Days")
+        x_days = np.linspace(0, 14, 100)
+        y_retention = calculate_ebbinghaus_retention(x_days, memory_factor)
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=x_days, y=y_retention, mode='lines', name='Decay Curve', line=dict(color='#0066CC', width=3)))
+        fig.add_trace(go.Scatter(x=[days_passed], y=[current_retention], mode='markers', name='Today', marker=dict(size=14, color='red', symbol='cross')))
+        fig.add_shape(type="line", x0=0, y0=60, x1=14, y1=60, line=dict(color="orange", dash="dash"))
+        
+        fig.update_layout(
+            xaxis_title="Days Elapsed",
+            yaxis_title="Retention Percentage (%)",
+            yaxis=dict(range=[0, 105]),
+            margin=dict(l=20, r=20, t=20, b=20),
+            height=350
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------------------------------------------
-# 7. HISTORICAL LOGS
+# 7. VIEW 2: AI QUIZ GENERATOR
 # ---------------------------------------------------------
-st.divider()
-st.subheader("4. Learning History")
-logs = fetch_history()
-if logs:
-    st.table([{"Topic": r[0], "Study Date": r[1], "Last Score": f"{r[2]}%", "Retention": f"{r[3]:.1f}%"} for r in logs])
-else:
-    st.write("No session records found.")
+elif app_mode == "AI Quiz Generator":
+    st.subheader("⚡ Automated AI Assessment")
+    
+    quiz_topic = st.text_input("Enter Topic to Test", value="Data Structures & Algorithms")
+    num_questions = st.slider("Number of Questions", 1, 5, 3)
+    
+    if st.button("Generate Quiz with Gemini AI", disabled=(gemini_model is None)):
+        with st.spinner("Generating quiz questions..."):
+            try:
+                prompt = f"Generate {num_questions} multiple-choice quiz questions on '{quiz_topic}'. Provide options and the correct answer for each."
+                response = gemini_model.generate_content(prompt)
+                st.session_state["active_quiz"] = response.text
+            except Exception as e:
+                st.error(f"Failed to query Gemini API: {e}")
+                
+    if "active_quiz" in st.session_state:
+        st.markdown("### Generated Assessment")
+        st.info(st.session_state["active_quiz"])
+        
+        st.markdown("---")
+        user_score = st.number_input("Enter Your Quiz Score (%)", min_value=0.0, max_value=100.0, value=85.0)
+        
+        if st.button("Save Assessment Log"):
+            save_log(quiz_topic, datetime.date.today(), 100.0, user_score)
+            st.success("Log saved successfully to SQLite database!")
+
+# ---------------------------------------------------------
+# 8. VIEW 3: LEARNING HISTORY LOG
+# ---------------------------------------------------------
+elif app_mode == "Learning History Log":
+    st.subheader("📜 Historical Session Logs")
+    
+    logs = get_logs()
+    if logs:
+        log_data = []
+        for row in logs:
+            log_data.append({
+                "Topic": row[0],
+                "Study Date": row[1],
+                "Retention (%)": f"{row[2]:.1f}%",
+                "Quiz Score (%)": f"{row[3]:.1f}%",
+                "Logged At": row[4]
+            })
+        st.dataframe(log_data, use_container_width=True)
+    else:
+        st.info("No study logs recorded yet. Complete a quiz or predictor session to add records.")
