@@ -7,6 +7,7 @@ import streamlit as st
 
 # ---------------------------------------------------------
 # 1. CLEAR OVERRIDING GOOGLE CLOUD OAUTH VARIABLES
+# (Prevents 401 ACCESS_TOKEN_TYPE_UNSUPPORTED errors)
 # ---------------------------------------------------------
 for env_var in ["GOOGLE_APPLICATION_CREDENTIALS", "GCP_PROJECT", "GOOGLE_CLOUD_PROJECT"]:
     if env_var in os.environ:
@@ -23,9 +24,11 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# 3. SAFE GOOGLE GEMINI INITIALIZATION (Fixed for 404 Model Error)
+# 3. DYNAMIC & SAFE GOOGLE GEMINI INITIALIZATION
+# (Prevents 404 Model Not Found errors)
 # ---------------------------------------------------------
 gemini_model = None
+selected_model_name = "None"
 genai_available = False
 
 try:
@@ -41,12 +44,30 @@ if genai_available and raw_key:
         clean_key = str(raw_key).strip().strip('"').strip("'")
         genai.configure(api_key=clean_key)
         
-        # Safe fallback chain for model naming
+        # Discover models dynamically supported by this specific API key
+        available_models = []
         try:
-            gemini_model = genai.GenerativeModel("gemini-1.5-flash-latest")
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    # Clean the 'models/' prefix
+                    model_id = m.name.replace('models/', '')
+                    available_models.append(model_id)
         except Exception:
-            gemini_model = genai.GenerativeModel("gemini-pro")
-            
+            pass
+
+        # Select the best available model
+        if "gemini-1.5-flash" in available_models:
+            selected_model_name = "gemini-1.5-flash"
+        elif "gemini-1.5-pro" in available_models:
+            selected_model_name = "gemini-1.5-pro"
+        elif "gemini-pro" in available_models:
+            selected_model_name = "gemini-pro"
+        elif available_models:
+            selected_model_name = available_models[0]
+        else:
+            selected_model_name = "gemini-1.5-flash"
+
+        gemini_model = genai.GenerativeModel(selected_model_name)
     except Exception as e:
         gemini_model = None
 
@@ -95,7 +116,7 @@ init_db()
 def calculate_ebbinghaus_retention(days, strength=1.5):
     """
     R = exp(-t / S)
-    Uses np.maximum to safely support both single floats and NumPy arrays.
+    Uses np.maximum to safely evaluate both single integers/floats and NumPy arrays.
     """
     days_clean = np.maximum(days, 0)
     return np.exp(-days_clean / strength) * 100
@@ -114,8 +135,10 @@ with st.sidebar:
         st.error("❌ `google-generativeai` package missing. Add it to `requirements.txt`.")
     elif not raw_key:
         st.warning("⚠️ `GEMINI_API_KEY` missing in Streamlit Secrets.")
+    elif gemini_model:
+        st.success(f"✅ Gemini AI Connected (`{selected_model_name}`)")
     else:
-        st.success("✅ Gemini AI Connected")
+        st.error("❌ Failed to initialize Gemini model.")
         
     st.markdown("---")
     app_mode = st.radio("Select View", ["Dashboard & Predictor", "AI Quiz Generator", "Learning History Log"])
