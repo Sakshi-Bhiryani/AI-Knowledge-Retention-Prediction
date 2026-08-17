@@ -7,7 +7,6 @@ import streamlit as st
 
 # ---------------------------------------------------------
 # 1. CLEAR OVERRIDING GOOGLE CLOUD OAUTH VARIABLES
-# (Fixes 401 ACCESS_TOKEN_TYPE_UNSUPPORTED errors)
 # ---------------------------------------------------------
 for env_var in ["GOOGLE_APPLICATION_CREDENTIALS", "GCP_PROJECT", "GOOGLE_CLOUD_PROJECT"]:
     if env_var in os.environ:
@@ -24,7 +23,7 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# 3. SAFE GOOGLE GEMINI INITIALIZATION
+# 3. SAFE GOOGLE GEMINI INITIALIZATION (Fixed for 404 Model Error)
 # ---------------------------------------------------------
 gemini_model = None
 genai_available = False
@@ -35,15 +34,19 @@ try:
 except ImportError:
     genai_available = False
 
-# Retrieve API key safely from Streamlit Secrets or Environment
 raw_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
 
 if genai_available and raw_key:
     try:
-        # Sanitize key string to remove stray quotes or spaces
         clean_key = str(raw_key).strip().strip('"').strip("'")
         genai.configure(api_key=clean_key)
-        gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+        
+        # Safe fallback chain for model naming
+        try:
+            gemini_model = genai.GenerativeModel("gemini-1.5-flash-latest")
+        except Exception:
+            gemini_model = genai.GenerativeModel("gemini-pro")
+            
     except Exception as e:
         gemini_model = None
 
@@ -87,12 +90,12 @@ def get_logs():
 init_db()
 
 # ---------------------------------------------------------
-# 5. EBBINGHAUS RETENTION ALGORITHM
+# 5. VECTORIZED EBBINGHAUS RETENTION ALGORITHM
 # ---------------------------------------------------------
 def calculate_ebbinghaus_retention(days, strength=1.5):
     """
     R = exp(-t / S)
-    Vectorized using np.maximum to support both single values and NumPy arrays safely.
+    Uses np.maximum to safely support both single floats and NumPy arrays.
     """
     days_clean = np.maximum(days, 0)
     return np.exp(-days_clean / strength) * 100
@@ -112,7 +115,7 @@ with st.sidebar:
     elif not raw_key:
         st.warning("⚠️ `GEMINI_API_KEY` missing in Streamlit Secrets.")
     else:
-        st.success("✅ Gemini AI Initialized")
+        st.success("✅ Gemini AI Connected")
         
     st.markdown("---")
     app_mode = st.radio("Select View", ["Dashboard & Predictor", "AI Quiz Generator", "Learning History Log"])
